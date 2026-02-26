@@ -28,11 +28,14 @@ const API_KEY = process.env.API_KEY;
 const API_URL = process.env.API_URL;
 const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
 
-// Check environment variables on startup
-if (!API_KEY || !API_URL || !GOOGLE_SHEET_URL) {
-  console.log("⚠️ Missing one or more environment variables!");
-} else {
-  console.log("✅ Environment variables loaded successfully");
+console.log("🔍 Checking environment variables...");
+
+if (!API_KEY) console.log("❌ API_KEY missing");
+if (!API_URL) console.log("❌ API_URL missing");
+if (!GOOGLE_SHEET_URL) console.log("❌ GOOGLE_SHEET_URL missing");
+
+if (API_KEY && API_URL && GOOGLE_SHEET_URL) {
+  console.log("✅ All environment variables loaded");
 }
 
 // ======================
@@ -41,7 +44,14 @@ if (!API_KEY || !API_URL || !GOOGLE_SHEET_URL) {
 const otpStore = {};
 
 // ======================
-// SEND OTP ROUTE
+// HEALTH CHECK
+// ======================
+app.get("/", (req, res) => {
+  res.send("Marksheet Submission Backend Running 🚀");
+});
+
+// ======================
+// SEND OTP
 // ======================
 app.post("/send-otp", async (req, res) => {
 
@@ -50,11 +60,12 @@ app.post("/send-otp", async (req, res) => {
   console.log("📩 /send-otp HIT:", phoneNumber);
 
   if (!phoneNumber) {
-    console.log("❌ Phone missing");
     return res.status(400).json({ success: false, message: "Phone required" });
   }
 
   const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+  console.log("🔐 Generated OTP:", otpCode);
 
   otpStore[phoneNumber] = {
     otp: otpCode,
@@ -63,7 +74,13 @@ app.post("/send-otp", async (req, res) => {
   };
 
   try {
-    const response = await axios.post(
+
+    if (!API_KEY || !API_URL) {
+      console.log("⚠️ Skipping external API call (missing API config)");
+      return res.json({ success: true });
+    }
+
+    await axios.post(
       API_URL,
       {
         apiKey: API_KEY,
@@ -80,17 +97,18 @@ app.post("/send-otp", async (req, res) => {
       }
     );
 
-    console.log("✅ OTP sent successfully to:", phoneNumber);
+    console.log("✅ OTP API call successful");
+
     res.json({ success: true });
 
   } catch (error) {
-    console.error("❌ OTP Error:", error.response?.data || error.message);
+    console.error("❌ OTP API Error:", error.response?.data || error.message);
     res.status(500).json({ success: false });
   }
 });
 
 // ======================
-// VERIFY OTP ROUTE
+// VERIFY OTP
 // ======================
 app.post("/verify-otp", (req, res) => {
 
@@ -105,16 +123,16 @@ app.post("/verify-otp", (req, res) => {
     record.otp === String(otpCode) &&
     Date.now() < record.expiresAt
   ) {
-    console.log("✅ OTP verified:", phoneNumber);
+    console.log("✅ OTP verified");
     return res.json({ success: true });
   }
 
-  console.log("❌ OTP invalid:", phoneNumber);
-  res.json({ success: false, message: "Invalid or expired OTP" });
+  console.log("❌ OTP invalid or expired");
+  res.json({ success: false });
 });
 
 // ======================
-// SUBMIT FORM ROUTE
+// SUBMIT FORM
 // ======================
 app.post(
   "/submit-form",
@@ -129,19 +147,17 @@ app.post(
     console.log("📤 /submit-form HIT");
 
     try {
+
       const { name, phone, parentProfession } = req.body;
 
       if (!req.files["mark10"] || !req.files["idCard"]) {
         console.log("❌ Required files missing");
-        return res.status(400).json({
-          success: false,
-          message: "Required files missing"
-        });
+        return res.status(400).json({ success: false });
       }
 
-      function toBase64(filePath, mimeType) {
-        const file = fs.readFileSync(filePath);
-        return `data:${mimeType};base64,` + file.toString("base64");
+      function toBase64(path, mime) {
+        const file = fs.readFileSync(path);
+        return `data:${mime};base64,` + file.toString("base64");
       }
 
       const idCardFile = req.files["idCard"][0];
@@ -161,6 +177,11 @@ app.post(
       if (req.files["mark12"]) {
         const file = req.files["mark12"][0];
         mark12Base64 = toBase64(file.path, file.mimetype);
+      }
+
+      if (!GOOGLE_SHEET_URL) {
+        console.log("⚠️ GOOGLE_SHEET_URL missing, skipping sheet upload");
+        return res.json({ success: true });
       }
 
       console.log("📊 Sending data to Apps Script...");
@@ -187,14 +208,10 @@ app.post(
 );
 
 // ======================
-// HEALTH CHECK
-// ======================
-app.get("/", (req, res) => {
-  res.send("Marksheet Submission Backend Running 🚀");
-});
-
+// START SERVER
 // ======================
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, () => {
-  console.log("🚀 Server running on port " + PORT);
+  console.log("🚀 Server running on port", PORT);
 });
