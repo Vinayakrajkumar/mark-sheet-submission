@@ -5,28 +5,54 @@ const multer = require("multer");
 const fs = require("fs");
 
 const app = express();
-app.use(express.json());
-app.use(cors());
 
-// Multer setup
+// ======================
+// MIDDLEWARE
+// ======================
+app.use(express.json());
+
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"]
+}));
+
+// ======================
+// MULTER SETUP
+// ======================
 const upload = multer({ dest: "uploads/" });
 
+// ======================
 // ENV VARIABLES
+// ======================
 const API_KEY = process.env.API_KEY;
 const API_URL = process.env.API_URL;
 const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
 
-// Temporary OTP store
+// Check environment variables on startup
+if (!API_KEY || !API_URL || !GOOGLE_SHEET_URL) {
+  console.log("⚠️ Missing one or more environment variables!");
+} else {
+  console.log("✅ Environment variables loaded successfully");
+}
+
+// ======================
+// TEMP OTP STORE
+// ======================
 const otpStore = {};
 
-// ==========================
-// SEND OTP
-// ==========================
+// ======================
+// SEND OTP ROUTE
+// ======================
 app.post("/send-otp", async (req, res) => {
+
   const { phoneNumber, userName } = req.body;
 
-  if (!phoneNumber)
+  console.log("📩 /send-otp HIT:", phoneNumber);
+
+  if (!phoneNumber) {
+    console.log("❌ Phone missing");
     return res.status(400).json({ success: false, message: "Phone required" });
+  }
 
   const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
 
@@ -37,7 +63,7 @@ app.post("/send-otp", async (req, res) => {
   };
 
   try {
-    await axios.post(
+    const response = await axios.post(
       API_URL,
       {
         apiKey: API_KEY,
@@ -54,18 +80,24 @@ app.post("/send-otp", async (req, res) => {
       }
     );
 
+    console.log("✅ OTP sent successfully to:", phoneNumber);
     res.json({ success: true });
+
   } catch (error) {
-    console.error("OTP Error:", error.message);
+    console.error("❌ OTP Error:", error.response?.data || error.message);
     res.status(500).json({ success: false });
   }
 });
 
-// ==========================
-// VERIFY OTP
-// ==========================
+// ======================
+// VERIFY OTP ROUTE
+// ======================
 app.post("/verify-otp", (req, res) => {
+
   const { phoneNumber, otpCode } = req.body;
+
+  console.log("🔎 /verify-otp HIT:", phoneNumber);
+
   const record = otpStore[phoneNumber];
 
   if (
@@ -73,15 +105,17 @@ app.post("/verify-otp", (req, res) => {
     record.otp === String(otpCode) &&
     Date.now() < record.expiresAt
   ) {
+    console.log("✅ OTP verified:", phoneNumber);
     return res.json({ success: true });
   }
 
+  console.log("❌ OTP invalid:", phoneNumber);
   res.json({ success: false, message: "Invalid or expired OTP" });
 });
 
-// ==========================
-// SUBMIT FORM
-// ==========================
+// ======================
+// SUBMIT FORM ROUTE
+// ======================
 app.post(
   "/submit-form",
   upload.fields([
@@ -91,17 +125,20 @@ app.post(
     { name: "idCard" }
   ]),
   async (req, res) => {
+
+    console.log("📤 /submit-form HIT");
+
     try {
       const { name, phone, parentProfession } = req.body;
 
       if (!req.files["mark10"] || !req.files["idCard"]) {
+        console.log("❌ Required files missing");
         return res.status(400).json({
           success: false,
           message: "Required files missing"
         });
       }
 
-      // Convert file to Base64
       function toBase64(filePath, mimeType) {
         const file = fs.readFileSync(filePath);
         return `data:${mimeType};base64,` + file.toString("base64");
@@ -110,15 +147,8 @@ app.post(
       const idCardFile = req.files["idCard"][0];
       const mark10File = req.files["mark10"][0];
 
-      const idCardBase64 = toBase64(
-        idCardFile.path,
-        idCardFile.mimetype
-      );
-
-      const mark10Base64 = toBase64(
-        mark10File.path,
-        mark10File.mimetype
-      );
+      const idCardBase64 = toBase64(idCardFile.path, idCardFile.mimetype);
+      const mark10Base64 = toBase64(mark10File.path, mark10File.mimetype);
 
       let mark11Base64 = "";
       let mark12Base64 = "";
@@ -133,7 +163,8 @@ app.post(
         mark12Base64 = toBase64(file.path, file.mimetype);
       }
 
-      // Send to Apps Script
+      console.log("📊 Sending data to Apps Script...");
+
       await axios.post(GOOGLE_SHEET_URL, {
         name,
         phone,
@@ -144,18 +175,26 @@ app.post(
         mark12: mark12Base64
       });
 
+      console.log("✅ Data saved to Google Sheets");
+
       res.json({ success: true });
 
     } catch (error) {
-      console.error("Submit Error:", error.message);
+      console.error("❌ Submit Error:", error.response?.data || error.message);
       res.status(500).json({ success: false });
     }
   }
 );
 
+// ======================
+// HEALTH CHECK
+// ======================
 app.get("/", (req, res) => {
   res.send("Marksheet Submission Backend Running 🚀");
 });
 
+// ======================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+app.listen(PORT, () => {
+  console.log("🚀 Server running on port " + PORT);
+});
