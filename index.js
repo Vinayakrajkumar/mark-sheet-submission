@@ -10,33 +10,26 @@ const app = express();
 // MIDDLEWARE
 // ======================
 app.use(express.json());
-
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST"]
 }));
 
 // ======================
-// MULTER SETUP
+// MULTER SETUP (Handles temporary file storage)
 // ======================
 const upload = multer({ dest: "uploads/" });
 
 // ======================
-// ENV VARIABLES
+// ENV VARIABLES (Ensure these match your Render Dashboard)
 // ======================
 const API_KEY = process.env.API_KEY;
 const API_URL = process.env.API_URL;
 const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
 
-console.log("🔍 Checking environment variables...");
-
-if (!API_KEY) console.log("❌ API_KEY missing");
-if (!API_URL) console.log("❌ API_URL missing");
-if (!GOOGLE_SHEET_URL) console.log("❌ GOOGLE_SHEET_URL missing");
-
-if (API_KEY && API_URL && GOOGLE_SHEET_URL) {
-  console.log("✅ All environment variables loaded");
-}
+console.log("🔍 System Booting...");
+if (!API_KEY) console.log("❌ CRITICAL: API_KEY is missing in Render settings");
+if (!API_URL) console.log("❌ CRITICAL: API_URL is missing in Render settings");
 
 // ======================
 // TEMP OTP STORE
@@ -47,92 +40,89 @@ const otpStore = {};
 // HEALTH CHECK
 // ======================
 app.get("/", (req, res) => {
-  res.send("Marksheet Submission Backend Running 🚀");
+  res.send("Hundred Learning: Marksheet Submission Backend is Live 🚀");
 });
 
 // ======================
-// SEND OTP
+// 1. SEND OTP ROUTE
 // ======================
 app.post("/send-otp", async (req, res) => {
-
   const { phoneNumber, userName } = req.body;
 
-  console.log("📩 /send-otp HIT:", phoneNumber);
-
   if (!phoneNumber) {
-    return res.status(400).json({ success: false, message: "Phone required" });
+    return res.status(400).json({ success: false, message: "Phone number required" });
   }
 
   const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
-
-  console.log("🔐 Generated OTP:", otpCode);
-
+  
+  // Store OTP with 5-minute expiry
   otpStore[phoneNumber] = {
     otp: otpCode,
     userName: userName || "Student",
     expiresAt: Date.now() + 5 * 60 * 1000
   };
 
-  try {
+  console.log(`🔐 Generated OTP ${otpCode} for ${phoneNumber}`);
 
+  try {
+    // Check if variables exist before calling NeoDove
     if (!API_KEY || !API_URL) {
-      console.log("⚠️ Skipping external API call (missing API config)");
-      return res.json({ success: true });
+      console.log("⚠️ API Configuration missing. Check Render Environment Variables.");
+      return res.status(500).json({ success: false, message: "Server config error" });
     }
 
-    await axios.post(
+    // NeoDove API V2 Call
+    const response = await axios.post(
       API_URL,
       {
-        apiKey: API_KEY,
-        campaignName: "OTP5",
+        apiKey: API_KEY, // Required in body
+        campaignName: "OTP5", // Must match your NeoDove setup
         destination: phoneNumber,
-        userName: userName,
-        templateParams: [otpCode]
+        userName: userName || "Student",
+        templateParams: [otpCode],
+        source: "Marksheet_Form",
+        buttons: [{
+          type: "button",
+          sub_type: "url",
+          index: 0,
+          parameters: [{ type: "text", text: otpCode }]
+        }]
       },
       {
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${API_KEY}`
+          "Authorization": `Bearer ${API_KEY}` // ✅ FIX: Added Bearer to fix 401 Unauthorized
         }
       }
     );
 
-    console.log("✅ OTP API call successful");
-
+    console.log("✅ NeoDove Success:", response.data);
     res.json({ success: true });
 
   } catch (error) {
-    console.error("❌ OTP API Error:", error.response?.data || error.message);
-    res.status(500).json({ success: false });
+    console.error("❌ NeoDove API Error:", error.response?.data || error.message);
+    res.status(500).json({ success: false, error: "Failed to send WhatsApp" });
   }
 });
 
 // ======================
-// VERIFY OTP
+// 2. VERIFY OTP ROUTE
 // ======================
 app.post("/verify-otp", (req, res) => {
-
   const { phoneNumber, otpCode } = req.body;
-
-  console.log("🔎 /verify-otp HIT:", phoneNumber);
-
   const record = otpStore[phoneNumber];
 
-  if (
-    record &&
-    record.otp === String(otpCode) &&
-    Date.now() < record.expiresAt
-  ) {
-    console.log("✅ OTP verified");
+  if (record && record.otp === String(otpCode) && Date.now() < record.expiresAt) {
+    console.log(`✅ ${phoneNumber} verified successfully`);
     return res.json({ success: true });
   }
 
-  console.log("❌ OTP invalid or expired");
-  res.json({ success: false });
+  console.log(`❌ Verification failed for ${phoneNumber}`);
+  res.status(401).json({ success: false, message: "Invalid or expired OTP" });
 });
 
 // ======================
-// SUBMIT FORM
+// 3. SUBMIT FORM ROUTE
 // ======================
 app.post(
   "/submit-form",
@@ -143,65 +133,49 @@ app.post(
     { name: "idCard" }
   ]),
   async (req, res) => {
-
-    console.log("📤 /submit-form HIT");
+    console.log("📤 Processing form submission...");
 
     try {
-
       const { name, phone, parentProfession } = req.body;
 
+      // Validate required files
       if (!req.files["mark10"] || !req.files["idCard"]) {
-        console.log("❌ Required files missing");
-        return res.status(400).json({ success: false });
+        return res.status(400).json({ success: false, message: "Required files missing" });
       }
 
-      function toBase64(path, mime) {
+      // Function to convert uploaded files to Base64 for Google Sheets
+      const toBase64 = (path, mime) => {
         const file = fs.readFileSync(path);
-        return `data:${mime};base64,` + file.toString("base64");
+        const base64 = file.toString("base64");
+        // Delete file after reading to save server space
+        fs.unlinkSync(path); 
+        return `data:${mime};base64,${base64}`;
+      };
+
+      const idCardBase64 = toBase64(req.files["idCard"][0].path, req.files["idCard"][0].mimetype);
+      const mark10Base64 = toBase64(req.files["mark10"][0].path, req.files["mark10"][0].mimetype);
+
+      let mark11Base64 = req.files["mark11"] ? toBase64(req.files["mark11"][0].path, req.files["mark11"][0].mimetype) : "";
+      let mark12Base64 = req.files["mark12"] ? toBase64(req.files["mark12"][0].path, req.files["mark12"][0].mimetype) : "";
+
+      // Send Data to Google Sheets Apps Script
+      if (GOOGLE_SHEET_URL) {
+        await axios.post(GOOGLE_SHEET_URL, {
+          name,
+          phone,
+          parentProfession,
+          idCard: idCardBase64,
+          mark10: mark10Base64,
+          mark11: mark11Base64,
+          mark12: mark12Base64
+        });
+        console.log("📊 Successfully saved to Google Sheets");
       }
-
-      const idCardFile = req.files["idCard"][0];
-      const mark10File = req.files["mark10"][0];
-
-      const idCardBase64 = toBase64(idCardFile.path, idCardFile.mimetype);
-      const mark10Base64 = toBase64(mark10File.path, mark10File.mimetype);
-
-      let mark11Base64 = "";
-      let mark12Base64 = "";
-
-      if (req.files["mark11"]) {
-        const file = req.files["mark11"][0];
-        mark11Base64 = toBase64(file.path, file.mimetype);
-      }
-
-      if (req.files["mark12"]) {
-        const file = req.files["mark12"][0];
-        mark12Base64 = toBase64(file.path, file.mimetype);
-      }
-
-      if (!GOOGLE_SHEET_URL) {
-        console.log("⚠️ GOOGLE_SHEET_URL missing, skipping sheet upload");
-        return res.json({ success: true });
-      }
-
-      console.log("📊 Sending data to Apps Script...");
-
-      await axios.post(GOOGLE_SHEET_URL, {
-        name,
-        phone,
-        parentProfession,
-        idCard: idCardBase64,
-        mark10: mark10Base64,
-        mark11: mark11Base64,
-        mark12: mark12Base64
-      });
-
-      console.log("✅ Data saved to Google Sheets");
 
       res.json({ success: true });
 
     } catch (error) {
-      console.error("❌ Submit Error:", error.response?.data || error.message);
+      console.error("❌ Submit Error:", error.message);
       res.status(500).json({ success: false });
     }
   }
@@ -211,7 +185,6 @@ app.post(
 // START SERVER
 // ======================
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
+  console.log(`🚀 Server is running on port ${PORT}`);
 });
