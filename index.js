@@ -2,14 +2,16 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 const multer = require("multer");
+const fs = require("fs");
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
+// Multer setup
 const upload = multer({ dest: "uploads/" });
 
-// ===== ENV VARIABLES =====
+// ENV VARIABLES
 const API_KEY = process.env.API_KEY;
 const API_URL = process.env.API_URL;
 const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
@@ -17,15 +19,14 @@ const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
 // Temporary OTP store
 const otpStore = {};
 
-// =============================
+// ==========================
 // SEND OTP
-// =============================
+// ==========================
 app.post("/send-otp", async (req, res) => {
   const { phoneNumber, userName } = req.body;
 
-  if (!phoneNumber) {
+  if (!phoneNumber)
     return res.status(400).json({ success: false, message: "Phone required" });
-  }
 
   const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
 
@@ -60,9 +61,9 @@ app.post("/send-otp", async (req, res) => {
   }
 });
 
-// =============================
+// ==========================
 // VERIFY OTP
-// =============================
+// ==========================
 app.post("/verify-otp", (req, res) => {
   const { phoneNumber, otpCode } = req.body;
   const record = otpStore[phoneNumber];
@@ -78,9 +79,9 @@ app.post("/verify-otp", (req, res) => {
   res.json({ success: false, message: "Invalid or expired OTP" });
 });
 
-// =============================
+// ==========================
 // SUBMIT FORM
-// =============================
+// ==========================
 app.post(
   "/submit-form",
   upload.fields([
@@ -100,14 +101,51 @@ app.post(
         });
       }
 
-      // Save to Google Sheet
+      // Convert file to Base64
+      function toBase64(filePath, mimeType) {
+        const file = fs.readFileSync(filePath);
+        return `data:${mimeType};base64,` + file.toString("base64");
+      }
+
+      const idCardFile = req.files["idCard"][0];
+      const mark10File = req.files["mark10"][0];
+
+      const idCardBase64 = toBase64(
+        idCardFile.path,
+        idCardFile.mimetype
+      );
+
+      const mark10Base64 = toBase64(
+        mark10File.path,
+        mark10File.mimetype
+      );
+
+      let mark11Base64 = "";
+      let mark12Base64 = "";
+
+      if (req.files["mark11"]) {
+        const file = req.files["mark11"][0];
+        mark11Base64 = toBase64(file.path, file.mimetype);
+      }
+
+      if (req.files["mark12"]) {
+        const file = req.files["mark12"][0];
+        mark12Base64 = toBase64(file.path, file.mimetype);
+      }
+
+      // Send to Apps Script
       await axios.post(GOOGLE_SHEET_URL, {
         name,
         phone,
-        parentProfession
+        parentProfession,
+        idCard: idCardBase64,
+        mark10: mark10Base64,
+        mark11: mark11Base64,
+        mark12: mark12Base64
       });
 
       res.json({ success: true });
+
     } catch (error) {
       console.error("Submit Error:", error.message);
       res.status(500).json({ success: false });
@@ -116,7 +154,7 @@ app.post(
 );
 
 app.get("/", (req, res) => {
-  res.send("Admission Backend Running 🚀");
+  res.send("Marksheet Submission Backend Running 🚀");
 });
 
 const PORT = process.env.PORT || 10000;
