@@ -29,6 +29,7 @@ const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
 
 console.log("🔍 System Booting...");
 console.log("📄 Google Sheet URL:", GOOGLE_SHEET_URL);
+console.log("📲 API URL:", API_URL);
 
 // ======================
 // TEMP OTP STORE
@@ -42,9 +43,9 @@ app.get("/", (req, res) => {
   res.send("Hundred Learning Backend is Live 🚀");
 });
 
-// ======================
-// 1️⃣ SUBMIT FORM (SAVE TO SHEET FIRST)
-// ======================
+// ========================================================
+// 1️⃣ SUBMIT FORM → SAVE TO GOOGLE SHEET
+// ========================================================
 app.post(
   "/submit-form",
   upload.fields([
@@ -61,7 +62,7 @@ app.post(
 
       if (!req.files["mark10"] || !req.files["idCard"]) {
         console.log("❌ Required files missing");
-        return res.status(400).json({ success: false, message: "Required files missing" });
+        return res.status(400).json({ success: false });
       }
 
       const toBase64 = (path, mime) => {
@@ -91,10 +92,10 @@ app.post(
       // ======================
       // SEND TO GOOGLE SHEET
       // ======================
-      if (!GOOGLE_SHEET_URL) {
-        console.log("❌ GOOGLE_SHEET_URL missing in environment");
-      } else {
+      if (GOOGLE_SHEET_URL) {
+
         try {
+
           const sheetRes = await axios.post(GOOGLE_SHEET_URL, {
             name,
             phone,
@@ -106,12 +107,8 @@ app.post(
 
           console.log("📊 Sheet Response:", sheetRes.data);
 
-          if (!sheetRes.data.success) {
-            console.log("❌ Sheet reported failure:", sheetRes.data.error);
-          }
-
         } catch (sheetError) {
-          console.log("❌ Sheet POST Error:",
+          console.log("❌ Sheet Error:",
             sheetError.response?.data || sheetError.message
           );
         }
@@ -120,15 +117,15 @@ app.post(
       res.json({ success: true });
 
     } catch (error) {
-      console.error("❌ Submit Error:", error.message);
+      console.log("❌ Submit Error:", error.message);
       res.status(500).json({ success: false });
     }
   }
 );
 
-// ======================
-// 2️⃣ SEND OTP (NOW INDEPENDENT)
-// ======================
+// ========================================================
+// 2️⃣ SEND OTP
+// ========================================================
 app.post("/send-otp", async (req, res) => {
 
   const { phoneNumber, userName } = req.body;
@@ -144,6 +141,11 @@ app.post("/send-otp", async (req, res) => {
     expiresAt: Date.now() + 5 * 60 * 1000
   };
 
+  const formattedPhone = "+" + phoneNumber;
+
+  console.log("📩 Sending OTP to:", formattedPhone);
+  console.log("🔐 Generated OTP:", otpCode);
+
   try {
 
     if (!API_KEY || !API_URL) {
@@ -151,12 +153,12 @@ app.post("/send-otp", async (req, res) => {
       return res.status(500).json({ success: false });
     }
 
-    await axios.post(
+    const response = await axios.post(
       API_URL,
       {
         apiKey: API_KEY,
         campaignName: "OTP5",
-        destination: phoneNumber,
+        destination: formattedPhone,
         userName: userName || "Student",
         templateParams: [otpCode],
         source: "Marksheet_Form"
@@ -169,20 +171,24 @@ app.post("/send-otp", async (req, res) => {
       }
     );
 
-    console.log("📲 OTP Sent to", phoneNumber);
+    console.log("📦 NeoDove Response:", response.data);
+    console.log("📲 OTP API Accepted");
+
     res.json({ success: true });
 
   } catch (error) {
+
     console.log("❌ OTP Error:",
       error.response?.data || error.message
     );
+
     res.status(500).json({ success: false });
   }
 });
 
-// ======================
+// ========================================================
 // 3️⃣ VERIFY OTP
-// ======================
+// ========================================================
 app.post("/verify-otp", (req, res) => {
 
   const { phoneNumber, otpCode } = req.body;
@@ -200,9 +206,9 @@ app.post("/verify-otp", (req, res) => {
   res.status(401).json({ success: false });
 });
 
-// ======================
+// ========================================================
 // START SERVER
-// ======================
+// ========================================================
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
