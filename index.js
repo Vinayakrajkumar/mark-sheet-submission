@@ -28,7 +28,7 @@ const API_URL = process.env.API_URL;
 const GOOGLE_SHEET_URL = process.env.GOOGLE_SHEET_URL;
 
 console.log("🔍 System Booting...");
-console.log("Google Sheet URL:", GOOGLE_SHEET_URL);
+console.log("📄 Google Sheet URL:", GOOGLE_SHEET_URL);
 
 // ======================
 // TEMP OTP STORE
@@ -43,13 +43,98 @@ app.get("/", (req, res) => {
 });
 
 // ======================
-// 1️⃣ SEND OTP
+// 1️⃣ SUBMIT FORM (SAVE TO SHEET FIRST)
+// ======================
+app.post(
+  "/submit-form",
+  upload.fields([
+    { name: "mark10" },
+    { name: "idCard" },
+    { name: "discountMark" }
+  ]),
+  async (req, res) => {
+
+    console.log("📤 Processing form submission...");
+
+    try {
+      const { name, phone, parentProfession } = req.body;
+
+      if (!req.files["mark10"] || !req.files["idCard"]) {
+        console.log("❌ Required files missing");
+        return res.status(400).json({ success: false, message: "Required files missing" });
+      }
+
+      const toBase64 = (path, mime) => {
+        const file = fs.readFileSync(path);
+        const base64 = file.toString("base64");
+        fs.unlinkSync(path);
+        return `data:${mime};base64,${base64}`;
+      };
+
+      const idCardBase64 = toBase64(
+        req.files["idCard"][0].path,
+        req.files["idCard"][0].mimetype
+      );
+
+      const mark10Base64 = toBase64(
+        req.files["mark10"][0].path,
+        req.files["mark10"][0].mimetype
+      );
+
+      const discountMarkBase64 = req.files["discountMark"]
+        ? toBase64(
+            req.files["discountMark"][0].path,
+            req.files["discountMark"][0].mimetype
+          )
+        : "";
+
+      // ======================
+      // SEND TO GOOGLE SHEET
+      // ======================
+      if (!GOOGLE_SHEET_URL) {
+        console.log("❌ GOOGLE_SHEET_URL missing in environment");
+      } else {
+        try {
+          const sheetRes = await axios.post(GOOGLE_SHEET_URL, {
+            name,
+            phone,
+            parentProfession,
+            idCard: idCardBase64,
+            mark10: mark10Base64,
+            discountMark: discountMarkBase64
+          });
+
+          console.log("📊 Sheet Response:", sheetRes.data);
+
+          if (!sheetRes.data.success) {
+            console.log("❌ Sheet reported failure:", sheetRes.data.error);
+          }
+
+        } catch (sheetError) {
+          console.log("❌ Sheet POST Error:",
+            sheetError.response?.data || sheetError.message
+          );
+        }
+      }
+
+      res.json({ success: true });
+
+    } catch (error) {
+      console.error("❌ Submit Error:", error.message);
+      res.status(500).json({ success: false });
+    }
+  }
+);
+
+// ======================
+// 2️⃣ SEND OTP (NOW INDEPENDENT)
 // ======================
 app.post("/send-otp", async (req, res) => {
+
   const { phoneNumber, userName } = req.body;
 
   if (!phoneNumber) {
-    return res.status(400).json({ success: false, message: "Phone number required" });
+    return res.status(400).json({ success: false });
   }
 
   const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
@@ -60,8 +145,10 @@ app.post("/send-otp", async (req, res) => {
   };
 
   try {
+
     if (!API_KEY || !API_URL) {
-      return res.status(500).json({ success: false, message: "API config missing" });
+      console.log("❌ API config missing");
+      return res.status(500).json({ success: false });
     }
 
     await axios.post(
@@ -82,92 +169,42 @@ app.post("/send-otp", async (req, res) => {
       }
     );
 
+    console.log("📲 OTP Sent to", phoneNumber);
     res.json({ success: true });
 
   } catch (error) {
-    console.error("❌ OTP Error:", error.response?.data || error.message);
+    console.log("❌ OTP Error:",
+      error.response?.data || error.message
+    );
     res.status(500).json({ success: false });
   }
 });
 
 // ======================
-// 2️⃣ VERIFY OTP
+// 3️⃣ VERIFY OTP
 // ======================
 app.post("/verify-otp", (req, res) => {
+
   const { phoneNumber, otpCode } = req.body;
   const record = otpStore[phoneNumber];
 
-  if (record && record.otp === String(otpCode) && Date.now() < record.expiresAt) {
+  if (record &&
+      record.otp === String(otpCode) &&
+      Date.now() < record.expiresAt) {
+
+    console.log("✅ OTP Verified for", phoneNumber);
     return res.json({ success: true });
   }
 
+  console.log("❌ OTP Failed for", phoneNumber);
   res.status(401).json({ success: false });
 });
-
-// ======================
-// 3️⃣ SUBMIT FORM (UPDATED TO MATCH FRONTEND)
-// ======================
-app.post(
-  "/submit-form",
-  upload.fields([
-    { name: "mark10" },
-    { name: "idCard" },
-    { name: "discountMark" }   // ✅ matches frontend
-  ]),
-  async (req, res) => {
-
-    console.log("📤 Processing form submission...");
-
-    try {
-      const { name, phone, parentProfession } = req.body;
-
-      if (!req.files["mark10"] || !req.files["idCard"]) {
-        return res.status(400).json({ success: false, message: "Required files missing" });
-      }
-
-      const toBase64 = (path, mime) => {
-        const file = fs.readFileSync(path);
-        const base64 = file.toString("base64");
-        fs.unlinkSync(path);
-        return `data:${mime};base64,${base64}`;
-      };
-
-      const idCardBase64 = toBase64(req.files["idCard"][0].path, req.files["idCard"][0].mimetype);
-      const mark10Base64 = toBase64(req.files["mark10"][0].path, req.files["mark10"][0].mimetype);
-
-      const discountMarkBase64 = req.files["discountMark"]
-        ? toBase64(req.files["discountMark"][0].path, req.files["discountMark"][0].mimetype)
-        : "";
-
-      // ======================
-      // SEND TO GOOGLE SHEET
-      // ======================
-      if (GOOGLE_SHEET_URL) {
-        const sheetRes = await axios.post(GOOGLE_SHEET_URL, {
-          name,
-          phone,
-          parentProfession,
-          idCard: idCardBase64,
-          mark10: mark10Base64,
-          discountMark: discountMarkBase64
-        });
-
-        console.log("📊 Sheet Response:", sheetRes.data);
-      }
-
-      res.json({ success: true });
-
-    } catch (error) {
-      console.error("❌ Submit Error:", error.response?.data || error.message);
-      res.status(500).json({ success: false });
-    }
-  }
-);
 
 // ======================
 // START SERVER
 // ======================
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
